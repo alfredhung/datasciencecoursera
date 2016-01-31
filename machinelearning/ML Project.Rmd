@@ -1,0 +1,188 @@
+---
+title: "Machine Learning Project"
+output: html_document
+date: "January 31, 2016"
+---
+### SUMMARY
+In this project, we will analyze exercise data from device accelerometers on the belt, forearm, arm, and dumbell of 6 participants who performed barbell lifts correctly and incorrectly in 5 different ways (class A-E). Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. The goal is to predict the manner in which they did the exercise, that is, how well they did it. This report will describe (1) how the model was built, (2) how cross-validation was used, (3) what the expected out of sample error is, (4) why these choices were made. We simulated four models using 10-fold cross validation: support vector machine, cart classification tree, random forest and treebag. The best performing model was Random Forest with the best accuracy at 99.67% or at an out-of-sample error of 0.33%.
+
+### READ DATA
+```{r readdata, echo=T, cache=T}
+# Read training and testing data sets
+setInternet2(use = TRUE)
+url1<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+download.file(url1, destfile="training.csv")
+data1<-read.csv("training.csv", sep=",",header=TRUE)
+
+url2<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(url2, destfile="testing.csv")
+data2<-read.csv("testing.csv", sep=",",header=TRUE)
+```
+
+### LOAD PACKAGES
+```{r loadpackages, echo=T, warning=F, message=F}
+library(caret); library(randomForest); library(e1071); library(rpart); library(plyr)
+```
+
+### DATA CLEANING
+```{r datacleaning, echo=T}
+# Delete columns with more than 5% of NAs and blank values
+
+# Check how many blank values in each column 
+blanks<-data.frame(col=0, length=0)
+for (i in 1: dim(data1)[2]) {
+        blanks[i,1]<-names(data1[i])
+        b1<-which(data1[,i]=="")
+        blanks[i,2]<-length(b1)
+}
+# Identify those columns with 19216 blank values out of a total of 19622 or 98%
+b1<-which(blanks[,2]==max(blanks$length)) 
+blanks[b1[1:3],]
+
+# Check how many NA values in each column
+nas<-data.frame(col=0, length=0)
+for (i in 1: dim(data1)[2]) {
+        nas[i,1]<-names(data1[i])
+        n1<-which(is.na(data1[,i]))
+        nas[i,2]<-length(n1)
+}
+# Identify those columns with 19216 blank values out of a total of 19622 or 98%
+n1<-which(nas[,2]==max(nas$length)) 
+nas[n1[1:3],]
+
+# Check how many 0 values in each column
+zero<-data.frame(col=0, length=0, pct=0)
+for (i in 1: dim(data1)[2]) {
+        zero[i,1]<-names(data1[i])
+        z1<-which(data1[,i]==0)
+        zero[i,2]<-length(z1)
+        zero[i,3]<-zero[i,2]*100/dim(data1)[1]
+}
+z1<-which(zero[,3]>=5) # 5% threshold for zero values
+zero[z1[1:3],]
+# Conclusion: Zero values are part of measurements after looking at the rows which they belong to.
+data1[z1[1:3],10:13]
+
+# Check for irrelevant variables
+nsv<-nearZeroVar(data1, saveMetrics=T)
+bothtrue<-(which(nsv$zeroVar==TRUE) %in% which(nsv$nzv==TRUE))
+bothtrue # There are no irrelevant values
+
+comb<-unique(c(b1,n1)) # Identify rows that are NAs and blanks
+cleandata<-data1[,-comb] # Choose columns without NAs and blank values for training set
+cleanvalid<-data2[,-c(comb,160)] # Choose columns without NAs and blank values for validation set. Last column is not variable "classe" but "problem_id" so it's deleted also. Therefore it cannot be used as validation data set so we'll use a subset of data1 (25%) as validation set
+valid<-cleanvalid[,-c(1:7)] # Choose columns without reference information for validation set
+```
+
+### DATA PARTITION
+```{r datapartition, echo=T, cache=T}
+# Even though each observation has a time component in it, the correct ways to do the exercises can be identified without reference to time or window number.  Physical movements A-E are very different in such a way that range and relationships of XYZ dimensions will average, regress and compute to distinctive outcomes in classe: Exactly according to the specification (Class A), Throwing the elbows to the front (Class B), Lifting the dumbbell only halfway (Class C), Lowering the dumbbell only halfway (Class D) and Throwing the hips to the front (Class E)
+dat<-cleandata[,-c(1:7)] # Include only activity data
+
+# Create 75% training and 25% testing sets out of original training set
+inTrain = createDataPartition(dat$classe, p = 3/4)[[1]]   
+train <- dat[inTrain,]
+test <- dat[-inTrain,]
+```
+
+### MODEL SIMULATIONS
+Use 10-fold cross validation with 75% training sample size to train each model and with a 25% testing sample size to determine its expected out-of-sample error rate. Used preProcess="pca" however it decreased accuracy slightly while it increased processing time by a few minutes which didn't make for a good trade-off.
+
+MODEL ONE: SUPPORT VECTOR MACHINE 
+```{r modelone, echo=T, cache=T}
+set.seed(32323)# set initial seed
+# Use default values for the model
+modfit1<-svm(classe~., data=train, trControl=trainControl(method="cv", number=10, p=0.75, allowParallel=T))
+# Save results for quick retrieval 
+save(modfit1, file="modfit1.RData") 
+load("modfit1.RData")
+# Predict using test set
+pred1<-predict(modfit1, test)
+# Show accuracy matrix
+confusionMatrix(pred1, test$classe)
+# Post results
+# modfit1
+ac1<-round(confusionMatrix(pred1, test$classe)$overall[1], 5)
+paste("Accuracy for SVM is:", ac1) 
+paste("Out of Sample error rate is:", 1-ac1) 
+```
+
+MODEL TWO: CART CLASSIFICATION TREE
+```{r modeltwo, echo=T, cache=T}
+set.seed(32323)# set initial seed
+# Use default values for the model
+modfit2<-train(classe~., method="rpart", data=train, trControl=trainControl(method="cv", number=10, p=0.75, allowParallel=T))
+# Save results for quick retrieval 
+save(modfit2, file="modfit2.RData") 
+load("modfit2.RData")
+# Predict using test set
+pred2<-predict(modfit2, test)
+# Show accuracy matrix
+confusionMatrix(pred2, test$classe)
+# Post results
+# modfit2
+ac2<-round(confusionMatrix(pred2, test$classe)$overall[1], 5)
+paste("Accuracy for Classification Tree is:", ac2) 
+paste("Out of Sample error rate is:", 1-ac2) 
+plot(modfit2)
+```
+
+MODEL THREE: RANDOM FOREST
+```{r modelthree, echo=T, cache=T}
+set.seed(32323)# set initial seed
+# Use default values for the model
+modfit3<-randomForest(classe~., train, importance=T, trControl=trainControl(method="cv", number=10, p=0.75, allowParallel=T))
+# Save results for quick retrieval 
+save(modfit3, file="modfit3.RData") 
+load("modfit3.RData")
+# Predict using test set
+pred3 <- predict(modfit3, newdata = test)
+# Show accuracy matrix
+confusionMatrix(pred3, test$classe)
+# Post results
+ac3<-round(confusionMatrix(pred3, test$classe)$overall[1], 5)
+paste("Accuracy for Random Forest is:", ac3) 
+paste("Out of Sample error rate is:", round(1-ac3,5)) 
+plot(modfit3)
+```
+
+MODEL FOUR: BAGGING
+```{r modelfour, echo=T, cache=T, message=F}
+set.seed(32323)# set initial seed
+# Use default values for the model
+modfit4<-train(classe~., method="treebag", data=train, trControl=trainControl(method="cv", number=10), allowParallel=T)
+# Save results for quick retrieval 
+save(modfit4, file="modfit4.RData") 
+load("modfit4.RData") 
+# Predict using test set
+pred4<-predict(modfit4, test)
+# Show accuracy matrix
+confusionMatrix(pred4, test$classe)
+# Post results
+# modfit4
+ac4<-round(confusionMatrix(pred4, test$classe)$overall[1], 5)
+paste("Accuracy for Bagging is:", ac4) 
+paste("Out of Sample error rate is:", 1-ac4) 
+```
+
+### CONCLUSIONS
+Of the four models simulated, Random Forest has the best accuracy and therefore lowest out-of-sample error rate. 
+```{r conclusions, echo=T}
+# Summarize results of modeling
+accuracy<-data.frame(SVM=ac1, ClassTree=ac2, RF=ac3, Bag=ac4)
+err<-data.frame(SVM=1-ac1, ClassTree=1-ac2, RF=1-ac3, Bag=1-ac4); rownames(err)<-"OOS Error"
+# Print results
+accuracy
+err
+bestmod<-modfit3
+bestmod
+paste("The resulting Random Forest model has the following parameters: (1) Type of random forest:", modfit3$type, "(2) Number of trees:", modfit3$ntree, "(3) No. of variables tried at each split:", modfit3$mtry)
+```
+
+### APPLYING BEST MODEL ON VALIDATION SET
+```{r validation, echo=T}
+# Predicting on validation set
+predvalid <- predict(bestmod, newdata = valid)
+predvalid
+```
+
